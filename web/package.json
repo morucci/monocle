@@ -23,7 +23,8 @@
     "react-datepicker": "^3.7.0",
     "react-dom": "^17.0.2",
     "react-event-timeline": "^1.6.3",
-    "yargs-parser": "^20.2.7"
+    "yargs-parser": "^20.2.7",
+    "oidc-client-ts": "^2.0.4"
   },
   "scripts": {
     "start": "mkdir -p build && npm run build && npm run live",

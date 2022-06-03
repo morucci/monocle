@@ -20,6 +20,10 @@ let readWindowLocationSearch = () => windowLocationSearch
 external windowLocationPathname: string = "pathname"
 let readWindowLocationPathname = () => windowLocationPathname
 
+@val @scope(("window", "location"))
+external windowLocationOrigin: string = "origin"
+let readWindowLocationOrigin = () => windowLocationOrigin
+
 // Bindings for moment
 %%raw(`
 import moment from 'moment'

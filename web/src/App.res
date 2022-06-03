@@ -4,6 +4,7 @@
 // The main component
 //
 open Prelude
+open OIDCAuth
 
 module MonocleNav = {
   @react.component
@@ -225,6 +226,18 @@ module App = {
   let make = (~about: ConfigTypes.about) => {
     let url = RescriptReactRouter.useUrl()
 
+    let oidcCallbackUrl = readWindowLocationOrigin() ++ "/auth/callback"
+    Js.log(oidcCallbackUrl)
+    let manager = getUserManager(
+      "https://accounts.google.com",
+      "337026574341-fdtl4e1v4edhspriu9dqo8er3ha1mf3o.apps.googleusercontent.com",
+      oidcCallbackUrl,
+    )
+    Js.log(manager)
+
+    // let puV = getUser(manager)
+    // Js.log(pu)
+
     // The initial index
     let initIndex = switch url.path->Belt.List.head->Belt.Option.getWithDefault("") {
     | "help" => ""
@@ -301,6 +314,18 @@ module App = {
               | list{_, "change", change} => <ChangeView change store />
               | list{_, "board"} => <Board store />
               | list{_, "search_author"} => <AuthorSearch store />
+              | list{"auth", "login"} => {
+                  Js.log("Performing login")
+                  let p = login(manager)
+                  Js.log(p)
+                  React.null
+                }
+              | list{"auth", "callback"} => {
+                  Js.log("In Auth callback")
+                  let p = signinRedirect(manager)
+                  Js.log(p)
+                  React.null
+                }
               | _ => <p> {"Not found"->str} </p>
               }}
             </PageSection>
