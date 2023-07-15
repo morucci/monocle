@@ -247,6 +247,7 @@ library
 
                      -- Lentille
                      , Lentille
+                     , XDoc
                      , Lentille.GraphQL
                      , Lentille.Bugzilla
                      , Lentille.Jira
