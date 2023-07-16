@@ -40,26 +40,36 @@ instance ToJSON XDocIndexMapping where
             ]
       ]
 
+xDocIndex :: BH.IndexName
+xDocIndex = BH.IndexName "xdoc"
+
 xMkBHEnv :: MonadIO m => m BH.BHEnv
 xMkBHEnv =
   liftIO (BH.mkBHEnv <$> pure (BH.Server "http://127.0.0.1:19200") <*> Monocle.Client.mkManager)
 
 xCreateIndex :: MonadIO m => BH.BHEnv -> m BH.Reply
 xCreateIndex bhEnv = BH.runBH bhEnv $
-  BH.createIndex BH.defaultIndexSettings (BH.IndexName "xdoc")
+  BH.createIndex BH.defaultIndexSettings xDocIndex
 
 xPutMapping :: MonadIO m => BH.BHEnv -> m BH.Reply
 xPutMapping bhEnv = BH.runBH bhEnv $
-  BH.putMapping (BH.IndexName "xdoc") XDocIndexMapping
+  BH.putMapping xDocIndex XDocIndexMapping
 
 xWrite :: (MonadIO m, ToJSON xdoc) => BH.BHEnv -> DocId -> xdoc -> m Bool
 xWrite bhEnv docId xdoc = do
-  r <- BH.runBH bhEnv $ BH.indexDocument (BH.IndexName "xdoc") BH.defaultIndexDocumentSettings xdoc docId
-  pure $ isSuccess r
+  exists <- BH.runBH bhEnv $ BH.documentExists xDocIndex docId
+  case exists of
+    False -> do
+      r <- BH.runBH bhEnv $ BH.indexDocument xDocIndex BH.defaultIndexDocumentSettings xdoc docId
+      pure $ isSuccess r
+    True -> do
+      r <- BH.runBH bhEnv $ BH.updateDocument xDocIndex BH.defaultIndexDocumentSettings xdoc docId
+      pure $ isSuccess r
+
 
 xRead :: (MonadIO m, FromJSON a, MonadCatch m) => BH.BHEnv -> BH.DocId -> m (Either BH.EsError a)
 xRead bhEnv docId = do
-  r <- BH.runBH bhEnv $ BH.getDocument (BH.IndexName "xdoc") docId
+  r <- BH.runBH bhEnv $ BH.getDocument xDocIndex docId
   BH.parseEsResponse r
 
 class XDoc a where
