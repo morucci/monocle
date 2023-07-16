@@ -46,34 +46,35 @@ xPutMapping :: MonadIO m => BH.BHEnv -> m BH.Reply
 xPutMapping bhEnv = BH.runBH bhEnv $
   BH.putMapping xDocIndex XDocIndexMapping
 
-xWrite :: (MonadIO m, ToJSON a, XDoc a) => BH.BHEnv -> a -> m Bool
-xWrite bhEnv xdoc = do
-  exists <- BH.runBH bhEnv $ BH.documentExists xDocIndex (xDocGetId xdoc)
-  now <- getCurrentTime
-  case exists of
-    False -> do
-      op1 <- BH.runBH bhEnv $ BH.indexDocument xDocIndex BH.defaultIndexDocumentSettings xdoc (xDocGetId xdoc)
-      void $ BH.runBH bhEnv $ BH.refreshIndex xDocIndex
-      op2 <- BH.runBH bhEnv $ BH.updateDocument xDocIndex BH.defaultIndexDocumentSettings (XDocMetadataCreatedDate $ dropMilliSec now) (xDocGetId xdoc)
-      op3 <- BH.runBH bhEnv $ BH.updateDocument xDocIndex BH.defaultIndexDocumentSettings (XDocMetadataUpdatedDate $ dropMilliSec now) (xDocGetId xdoc)
-      trace (show op1) (pure ())
-      trace (show op2) (pure ())
-      trace (show op3) (pure ())
-      pure $ (isSuccess op1) && (isSuccess op2) && (isSuccess op3)
-    True -> do
-      op1 <- BH.runBH bhEnv $ BH.updateDocument xDocIndex BH.defaultIndexDocumentSettings xdoc (xDocGetId xdoc)
-      op2 <- BH.runBH bhEnv $ BH.updateDocument xDocIndex BH.defaultIndexDocumentSettings (XDocMetadataUpdatedDate $ dropMilliSec now) (xDocGetId xdoc)
-      pure $ (isSuccess op1) && (isSuccess op2)
+xCreate :: (MonadIO m, ToJSON a, XDoc a) => BH.BHEnv -> a -> m Bool
+xCreate bhEnv xdoc = do
+  op1 <- BH.runBH bhEnv $ BH.indexDocument xDocIndex BH.defaultIndexDocumentSettings xdoc (xDocGetId xdoc)
+  void $ BH.runBH bhEnv $ BH.refreshIndex xDocIndex
+  pure $ isSuccess op1
+
+xExists :: MonadIO m => BH.BHEnv -> DocId -> m Bool
+xExists bhEnv docId = BH.runBH bhEnv $ BH.documentExists xDocIndex docId
+
+xUpdate :: (MonadIO m, ToJSON a, XDoc a) => BH.BHEnv -> a -> m Bool
+xUpdate bhEnv xdoc = do
+  op1 <- BH.runBH bhEnv $ BH.updateDocument xDocIndex BH.defaultIndexDocumentSettings xdoc (xDocGetId xdoc)
+  pure $ isSuccess op1
 
 xRead :: (MonadIO m, FromJSON a, MonadCatch m) => BH.BHEnv -> BH.DocId -> m (Either BH.EsError a)
 xRead bhEnv docId = do
-  r <- BH.runBH bhEnv $ BH.getDocument xDocIndex docId
-  BH.parseEsResponse r
+  exists <- xExists bhEnv docId
+  case exists of
+    True -> do
+      r <- BH.runBH bhEnv $ BH.getDocument xDocIndex docId
+      BH.parseEsResponse r
+    False -> do
+      pure $ Left $ BH.EsError 1 ""
 
 class XDoc a where
   xDocGetId :: a -> DocId
   xDocRead :: (MonadIO m, MonadCatch m, FromJSON a) => DocId -> m (Maybe a)
-  xDocWrite :: (MonadIO m, ToJSON a) => a -> m Bool
+  xDocCreate :: (MonadIO m, ToJSON a) => a -> m Bool
+  xDocUpdate :: (MonadIO m, ToJSON a) => a -> m Bool
   xDocDelete :: MonadIO m => a -> m ()
 
 newtype XDocLabel = XDocLabel String deriving (Show, ToJSON, FromJSON) via String
@@ -82,34 +83,14 @@ newtype XDocAuthor = XDocAuthor String deriving  (Show, ToJSON, FromJSON) via St
 data XText = XText {
   xtextId :: DocId,
   xtextText :: Text,
-  xtextMetadataCreatedDate :: Maybe UTCTime,
-  xtextMetadataUpdatedDate :: Maybe UTCTime
+  xtextMetadataCreatedDate :: UTCTime,
+  xtextMetadataUpdatedDate :: UTCTime
 } deriving (Show, Generic)
 
 instance ToJSON XText where
   toJSON = genericToJSON $ aesonPrefix snakeCase
 
 instance FromJSON XText where
-  parseJSON = genericParseJSON $ aesonPrefix snakeCase
-
-newtype XDocMetadataCreatedDate = XDocMetadataCreatedDate {
-  xdocMetadataCreatedDate :: UTCTime
-} deriving (Show, Generic)
-
-instance ToJSON XDocMetadataCreatedDate where
-  toJSON = genericToJSON $ aesonPrefix snakeCase
-
-instance FromJSON XDocMetadataCreatedDate where
-  parseJSON = genericParseJSON $ aesonPrefix snakeCase
-
-newtype XDocMetadataUpdatedDate = XDocMetadataUpdatedDate {
-  xdocMetadataUpdatedDate :: UTCTime
-} deriving (Show, Generic)
-
-instance ToJSON XDocMetadataUpdatedDate where
-  toJSON = genericToJSON $ aesonPrefix snakeCase
-
-instance FromJSON XDocMetadataUpdatedDate where
   parseJSON = genericParseJSON $ aesonPrefix snakeCase
 
 instance XDoc XText where
@@ -127,19 +108,47 @@ instance XDoc XText where
       getHit (Just (BH.EsResultFound _ cm)) = Just cm
       getHit Nothing = Nothing
 
-  xDocWrite :: MonadIO m => XText -> m Bool
-  xDocWrite s = do
+  xDocCreate :: MonadIO m => XText -> m Bool
+  xDocCreate s = do
     bhEnv <- xMkBHEnv
-    xWrite bhEnv s
+    exists <- xExists bhEnv (xDocGetId s)
+    case exists of
+      True -> pure False
+      False -> xCreate bhEnv s
+
+  xDocUpdate :: MonadIO m => XText -> m Bool
+  xDocUpdate s = do
+    bhEnv <- xMkBHEnv
+    exists <- xExists bhEnv (xDocGetId s)
+    case exists of
+      True -> xUpdate bhEnv s
+      False -> pure False
 
   xDocDelete :: MonadIO m => XText -> m ()
   xDocDelete _s = pure ()
 
-mkXText :: Text -> Text -> XText
-mkXText docRef sData = do
-    XText {
-      xtextId = (BH.DocId docRef),
-      xtextText = sData,
-      xtextMetadataCreatedDate = Nothing,
-      xtextMetadataUpdatedDate = Nothing
-    }
+setXText :: forall m . (MonadIO m, MonadCatch m) => Text -> Text -> m (Bool, XText)
+setXText docRef sData = do
+    now <- dropMilliSec <$> getCurrentTime
+    current_docM <- xDocRead (BH.DocId docRef) :: m (Maybe XText)
+    case current_docM of
+      Just current_doc -> do
+        let doc = current_doc {
+          xtextText = sData,
+          xtextMetadataUpdatedDate = now
+        }
+        updated <- xDocUpdate doc
+        pure (updated, doc)
+      Nothing -> do
+        let doc = XText {
+          xtextId = (BH.DocId docRef),
+          xtextText = sData,
+          xtextMetadataCreatedDate = now,
+          xtextMetadataUpdatedDate = now
+        }
+        created <- xDocCreate doc
+        pure (created, doc)
+
+getXText :: forall m . (MonadIO m, MonadCatch m) => Text -> m (Maybe XText)
+getXText docRef = do
+    xDocRead (BH.DocId docRef) :: m (Maybe XText)
